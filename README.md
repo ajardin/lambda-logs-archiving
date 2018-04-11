@@ -34,10 +34,11 @@ There is no additional configuration required.
 Two environment variables must be configured on the Lambda function:
 * `BUCKET_NAME`, the S3 bucket name where logs will be archived.
 * `ENVIRONMENT_NAME`, the environment name from where logs have been generated.
+* `TARGET_DATE` (optional), the day on which the logs must be archived.
 
 These values can also be passed manually outside AWS by using:
 ```
-go run logs-archiving.go -bucket XXXXX -environment XXXXX
+go run logs-archiving.go -bucket XXXXX -environment XXXXX (-target XXXXX)
 ```
 
 Therefore if you want to use the script locally, you have to replace `lambda.Start(LambdaHandler)` by `LambdaHandler()`. 

@@ -8,6 +8,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -15,21 +24,18 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"io"
-	"log"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
 )
 
 const workspace = string(os.PathSeparator) + "tmp" + string(os.PathSeparator) + "workspace"
-const timeout = "5s"
+const timeout = "10s"
 
 var (
 	bucket      string
 	environment string
+	target      string
+
+	startDate time.Time
+	endDate   time.Time
 
 	cwService *cloudwatchlogs.CloudWatchLogs
 	s3Service *s3.S3
@@ -38,6 +44,7 @@ var (
 func init() {
 	flag.StringVar(&bucket, "bucket", os.Getenv("BUCKET_NAME"), "The S3 bucket name where logs will be archived.")
 	flag.StringVar(&environment, "environment", os.Getenv("ENVIRONMENT_NAME"), "The environment name from where logs have been generated.")
+	flag.StringVar(&target, "target", os.Getenv("TARGET_DATE"), "The day on which the logs must be archived.")
 
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
@@ -63,19 +70,16 @@ func LambdaHandler() {
 	prepareWorkspace()
 
 	var wg sync.WaitGroup
-
-	yesterday := time.Now().AddDate(0, 0, -1)
 	for _, logStream := range streamList.LogStreams {
 		wg.Add(1)
-		go func(logStream *cloudwatchlogs.LogStream, yesterday time.Time) {
+		go func(logStream *cloudwatchlogs.LogStream) {
 			defer wg.Done()
-			downloadLogs(logStream, yesterday)
-		}(logStream, yesterday)
+			downloadLogs(logStream)
+		}(logStream)
 	}
-
 	wg.Wait()
 
-	archive, err := os.Create(workspace + string(os.PathSeparator) + yesterday.Format("2006-01-02") + ".tar.gz")
+	archive, err := os.Create(workspace + string(os.PathSeparator) + startDate.Format("2006-01-02") + ".tar.gz")
 	check(err)
 	defer archive.Close()
 
@@ -94,6 +98,19 @@ func loadFlagValues() {
 	if len(environment) == 0 {
 		panic(errors.New("a valid environment must be provided"))
 	}
+
+	if len(target) > 0 {
+		r, _ := regexp.Compile(`\d{4}-\d{2}-\d{2}`)
+		if r.MatchString(target) != true {
+			panic(errors.New("a valid target date must be provided (YYYY-MM-DD)"))
+		}
+
+		startDate, _ = time.Parse("2006-01-02", target)
+	} else {
+		yesterday := time.Now().AddDate(0, 0, -1)
+		startDate = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	endDate = startDate.Add(time.Duration(24*time.Hour - time.Second))
 }
 
 // check causes the current program to exit if an error occurred.
@@ -113,10 +130,7 @@ func prepareWorkspace() {
 }
 
 // downloadLogs downloads CloudWatch logs into the workspace.
-func downloadLogs(logStream *cloudwatchlogs.LogStream, yesterday time.Time) {
-	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
-
+func downloadLogs(logStream *cloudwatchlogs.LogStream) {
 	file, err := os.Create(workspace + string(os.PathSeparator) + *logStream.LogStreamName + ".log")
 	check(err)
 	defer file.Close()
