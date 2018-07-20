@@ -71,6 +71,11 @@ func LambdaHandler() {
 
 	var wg sync.WaitGroup
 	for _, logStream := range streamList.LogStreams {
+		// Avoid long-running processes by skipping files which contain access logs.
+		if strings.Contains(*logStream.LogStreamName, "access") {
+			continue
+		}
+
 		wg.Add(1)
 		go func(logStream *cloudwatchlogs.LogStream) {
 			defer wg.Done()
